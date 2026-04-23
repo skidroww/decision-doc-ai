@@ -1,0 +1,77 @@
+# ======================
+# Python
+# ======================
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.Python
+env/
+venv/
+.venv/
+pip-log.txt
+pip-delete-this-directory.txt
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# ======================
+# Environment variables
+# ======================
+.env
+.env.*
+!.env.example
+
+# ======================
+# IDE / Editor
+# ======================
+.vscode/
+.idea/
+*.swp
+*.swo
+*.swn
+.DS_Store
+
+# ======================
+# Jupyter Notebook
+# ======================
+.ipynb_checkpoints/
+
+# ======================
+# FastAPI / Server logs
+# ======================
+*.log
+logs/
+
+# ======================
+# Model / Data (RAG 관련 중요)
+# ======================
+models/
+model/
+*.bin
+*.pt
+*.pth
+*.onnx
+
+data/
+datasets/
+*.parquet
+*.csv
+*.jsonl
+
+# 벡터DB (FAISS / Chroma 등)
+chroma_db/
+faiss_index/
+vectorstore/
+
+# ======================
+# Build / Dist
+# ======================
+build/
+dist/
+*.egg-info/
+
+# ======================
+# OS
+# ======================
+Thumbs.db
