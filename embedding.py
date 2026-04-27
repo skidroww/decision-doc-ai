@@ -9,19 +9,15 @@ from konlpy.tag import Okt
 from typing import List, Dict, Any
 from tqdm import tqdm
 
-# ==========================================
-# 1. 설정 및 초기화
-# ==========================================
 DATA_DIR = "./data/공개본 의결서"  # hybrid.json과 metadata.json이 있는 폴더
 DB_DIR = "./chroma_db"
 BM25_INDEX_PATH = "./bm25_index.pkl"
 CORPUS_INFO_PATH = "./corpus_info.pkl" # BM25와 매핑할 원본 데이터
 
-# 임베딩 모델 로드 (BGE-M3 추천)
 print("임베딩 모델 로딩 중...")
 embedding_model = SentenceTransformer('BAAI/bge-m3')
 
-# 형태소 분석기 로드
+# 형태소 분석기
 #mecab = Mecab()
 okt = Okt()
 
@@ -29,26 +25,25 @@ okt = Okt()
 chroma_client = chromadb.PersistentClient(path=DB_DIR)
 collection = chroma_client.get_or_create_collection(    
     name="ftc_resolutions",
-    metadata={"hnsw:space": "cosine"} # 코사인 유사도 사용
+    metadata={"hnsw:space": "cosine"}
 )
 
-# ==========================================
-# 2. 데이터 파싱 및 메타데이터 주입 (테스트용으로 수정됨)
-# ==========================================
 def load_and_inject_data(data_dir: str, max_files: int = 10) -> List[Dict[str, Any]]:
     processed_chunks = []
     
-    # 1. 디렉토리에서 metadata.json 파일만 모두 찾기
-    all_files = [f for f in os.listdir(data_dir) if f.endswith("_metadata.json")]
-    
-    # 2. [핵심] 테스트를 위해 설정한 갯수(10개)만큼만 자르기
+    all_files = []
+    for f in os.listdir(data_dir): #문자열 반환
+        if f.endswith("_metadata.json"):
+            all_files.append(f)
+    # all_files = [f for f in os.listdir(data_dir) if f.endswith("_metadata.json")]
+  
     test_files = all_files[:max_files]
-    print(f"💡 테스트 모드: 전체 {len(all_files)}개 문서 중 {len(test_files)}개만 처리합니다.")
+    print(f" 테스트 : 전체 {len(all_files)}개 문서 중 {len(test_files)}개만 처리합니다.")
     
     for filename in test_files:
-        base_name = filename.replace("_metadata.json", "")
-        meta_path = os.path.join(data_dir, filename)
-        hybrid_path = os.path.join(data_dir, f"{base_name}_hybrid.json")
+        base_name = filename.replace("_metadata.json", "") 
+        meta_path = os.path.join(data_dir, filename) #metadata 파일 경로
+        hybrid_path = os.path.join(data_dir, f"{base_name}_hybrid.json") #hybrid 파일 경로
         
         if not os.path.exists(hybrid_path):
             continue
@@ -86,9 +81,7 @@ def load_and_inject_data(data_dir: str, max_files: int = 10) -> List[Dict[str, A
             
     return processed_chunks
 
-# ==========================================
-# 3. 임베딩, DB 저장 및 인덱스 생성 (수정된 버전)
-# ==========================================
+
 def build_indices():
     print("데이터 로드 및 메타데이터 주입 시작...")
     chunks = load_and_inject_data(DATA_DIR)
@@ -99,7 +92,7 @@ def build_indices():
     metadatas = []
     tokenized_corpus = []
     
-    # 1. 데이터 준비 및 BM25 토큰화 (tqdm 추가로 진행률 확인)
+    # 1. 데이터 준비 및 BM25 토큰화 
     for item in tqdm(chunks, desc="데이터 전처리 및 BM25 토큰화"):
         ids.append(item["chunk_id"])
         documents.append(item["injected_text"])
@@ -110,15 +103,14 @@ def build_indices():
         tokens = item["injected_text"].split()
         tokenized_corpus.append(tokens)
 
-    # 2. ChromaDB에 벡터 저장 (배치 처리 및 bge-m3 직접 임베딩)
-    BATCH_SIZE = 128  # 한 번에 처리할 청크 개수 (메모리가 부족하면 64로 줄이세요)
+    # 2. ChromaDB에 벡터 저장
+    BATCH_SIZE = 128
     
     for i in tqdm(range(0, len(documents), BATCH_SIZE), desc="ChromaDB 임베딩 및 저장"):
         batch_docs = documents[i : i + BATCH_SIZE]
         batch_ids = ids[i : i + BATCH_SIZE]
         batch_meta = metadatas[i : i + BATCH_SIZE]
 
-        # [수정됨] 로드해둔 bge-m3 모델로 텍스트를 직접 벡터화 (매우 중요)
         batch_embeddings = embedding_model.encode(batch_docs, normalize_embeddings=True).tolist()
 
         collection.add(

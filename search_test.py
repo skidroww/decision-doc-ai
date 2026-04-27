@@ -2,17 +2,13 @@ import pickle
 import chromadb
 from sentence_transformers import SentenceTransformer
 
-# ==========================================
-# 1. 저장된 모델 및 데이터베이스 로드
-# ==========================================
+
 print("검색 엔진 및 DB 로딩 중...")
 embedding_model = SentenceTransformer('BAAI/bge-m3')
 
-# ChromaDB 로드
 chroma_client = chromadb.PersistentClient(path="./chroma_db")
 collection = chroma_client.get_collection(name="ftc_resolutions")
 
-# BM25 및 원본 코퍼스 로드
 with open("./bm25_index.pkl", 'rb') as f:
     bm25 = pickle.load(f)
 with open("./corpus_info.pkl", 'rb') as f:
@@ -20,9 +16,7 @@ with open("./corpus_info.pkl", 'rb') as f:
 
 print("로딩 완료! 검색을 시작합니다.\n")
 
-# ==========================================
-# 2. 하이브리드 검색 함수 (Vector + BM25 + RRF)
-# ==========================================
+
 def hybrid_search(query: str, target_company: str, top_k: int = 5):
     # [1] Vector Search 
     query_embedding = embedding_model.encode([query], normalize_embeddings=True).tolist()
@@ -33,7 +27,7 @@ def hybrid_search(query: str, target_company: str, top_k: int = 5):
     )
     vector_ids = vector_results['ids'][0]
 
-    # [2] Keyword Search (BM25 - 단어 매칭 검색)
+    # [2] Keyword Search (BM25)
     # 인덱싱할 때 띄어쓰기 기준으로 토큰화했으므로 동일하게 처리
     tokenized_query = query.split() 
     bm25_scores = bm25.get_scores(tokenized_query)
@@ -42,10 +36,10 @@ def hybrid_search(query: str, target_company: str, top_k: int = 5):
     #bm25_top_indices = sorted(range(len(bm25_scores)), key=lambda i: bm25_scores[i], reverse=True)[:20]
     #bm25_ids = [corpus_info[i]['chunk_id'] for i in bm25_top_indices]
 
-
     # BM25 결과에서도 타겟 기업의 문서만 필터링해서 뽑아냅니다.
     bm25_filtered = []
     for i, score in sorted(enumerate(bm25_scores), key=lambda x: x[1], reverse=True):
+        #  corpus_info[i]["metadata"]["company"] == target_company -> 더 좋은방법. 나중에 시도
         if corpus_info[i]["injected_text"].find(target_company) != -1: # 타겟 기업이 포함된 청크만
             bm25_filtered.append(corpus_info[i]['chunk_id'])
         if len(bm25_filtered) >= 20:
@@ -78,9 +72,7 @@ def hybrid_search(query: str, target_company: str, top_k: int = 5):
 
     return top_k_ids
 
-# ==========================================
-# 3. 실제 질문으로 검색 테스트
-# ==========================================
+
 if __name__ == "__main__":
     #test_query = "한국토종닭협회가 부과받은 최종 과징금액은 얼마이며, 납부 기한은 언제까지인가요?"
     test_query = "과징금 납부 기한"
