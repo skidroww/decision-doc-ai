@@ -96,3 +96,5 @@ if __name__ == "__main__":
             print(f"{i}. {chunk_id} \n  미리보기:(정보를 찾을 수 없음))\n")
         
     print("-" * 80)
+
+    
