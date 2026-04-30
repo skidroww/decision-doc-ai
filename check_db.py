@@ -1,6 +1,6 @@
 import pickle
 
-with open("./corpus_info.pkl", 'rb') as f:
+with open("./corpus_info2.pkl", 'rb') as f:
     corpus_info = pickle.load(f)
 
 doc_info = {}

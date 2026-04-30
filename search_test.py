@@ -6,12 +6,12 @@ from sentence_transformers import SentenceTransformer
 print("검색 엔진 및 DB 로딩 중...")
 embedding_model = SentenceTransformer('BAAI/bge-m3')
 
-chroma_client = chromadb.PersistentClient(path="./chroma_db")
+chroma_client = chromadb.PersistentClient(path="./chroma_db2")
 collection = chroma_client.get_collection(name="ftc_resolutions")
 
-with open("./bm25_index.pkl", 'rb') as f:
+with open("./bm25_index2.pkl", 'rb') as f:
     bm25 = pickle.load(f)
-with open("./corpus_info.pkl", 'rb') as f:
+with open("./corpus_info2.pkl", 'rb') as f:
     corpus_info = pickle.load(f)
 
 print("로딩 완료! 검색을 시작합니다.\n")
