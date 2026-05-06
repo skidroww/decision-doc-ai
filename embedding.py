@@ -1,25 +1,26 @@
 import os
 import json
 import pickle
+import difflib
 import chromadb
-from sentence_transformers import SentenceTransformer
 from rank_bm25 import BM25Okapi
-#from konlpy.tag import Mecab
 from konlpy.tag import Okt
 from typing import List, Dict, Any
 from tqdm import tqdm
+#from kiwipiepy import Kiwi
+from sentence_transformers import SentenceTransformer
 
-DATA_DIR = "./data/공개본 의결서"  # hybrid.json과 metadata.json이 있는 폴더
+DATA_DIR = "./data/공개본 의결서"  
 DB_DIR = "./chroma_db"
 BM25_INDEX_PATH = "./bm25_index.pkl"
-CORPUS_INFO_PATH = "./corpus_info.pkl" # BM25와 매핑할 원본 데이터
+CORPUS_INFO_PATH = "./corpus_info.pkl" 
 
 print("임베딩 모델 로딩 중...")
 embedding_model = SentenceTransformer('BAAI/bge-m3')
 
 # 형태소 분석기
-#mecab = Mecab()
 okt = Okt()
+#kiwi = Kiwi()
 
 # ChromaDB 로컬 영구 저장소 초기화
 chroma_client = chromadb.PersistentClient(path=DB_DIR)
@@ -28,9 +29,57 @@ collection = chroma_client.get_or_create_collection(
     metadata={"hnsw:space": "cosine"}
 )
 
+
+def clean_duplicate_text(text, similarity_threshold=0.9, min_length=15, window_size=10):
+    """
+    청크 내에서 문단/문장 단위로 중복을 검사하여 제거하는 함수
+    
+    - similarity_threshold: 0.9 (90% 이상 일치하면 중복으로 간주)
+    - min_length: 15 (너무 짧은 문자열 "단위: 천 원", "1." 등은 중복 검사에서 제외)
+    - window_size: 10 (최근 10줄 내에 비슷한 문장이 있었는지 검사)
+    """
+    lines = text.split('\n')
+    cleaned_lines = []
+    
+    # 중복 비교를 위해 최근 추가된 의미 있는 텍스트를 저장할 버퍼
+    recent_lines = []
+
+    for line in lines:
+        line_stripped = line.strip()
+        
+        # 빈 줄은 그냥 통과
+        if not line_stripped:
+            continue
+
+        # 길이가 너무 짧은 텍스트(번호, 단위 등)는 중복 체크 없이 그냥 추가
+        if len(line_stripped) < min_length:
+            cleaned_lines.append(line_stripped)
+            continue
+
+        # 최근 window_size 만큼의 줄들과 유사도 비교
+        is_duplicate = False
+        for recent in recent_lines:
+            similarity = difflib.SequenceMatcher(None, recent, line_stripped).ratio()
+            if similarity >= similarity_threshold:
+                is_duplicate = True
+                break
+        
+        # 중복이 아니면 결과 배열 및 최근 버퍼에 추가
+        if not is_duplicate:
+            cleaned_lines.append(line_stripped)
+            recent_lines.append(line_stripped)
+            
+            # 버퍼가 window_size를 넘어가면 가장 오래된 것 삭제
+            if len(recent_lines) > window_size:
+                recent_lines.pop(0)
+
+    # 다시 문자열로 합쳐서 반환
+    return '\n'.join(cleaned_lines)
+
 def load_and_inject_data(data_dir: str, max_files: int = 10) -> List[Dict[str, Any]]:
     processed_chunks = []
     
+
     all_files = []
     for f in os.listdir(data_dir): #문자열 반환
         if f.endswith("_metadata.json"):
@@ -65,8 +114,9 @@ def load_and_inject_data(data_dir: str, max_files: int = 10) -> List[Dict[str, A
         for i, chunk in enumerate(hybrid_data):
             chunk_id = chunk["metadata"]["chunk_id"]
             original_text = chunk.get("page_content", "")
+            clean_original_text = clean_duplicate_text(original_text)
             
-            injected_text = f"[사건명: {title}] [피심인기업명: {company}] [위반유형: {violation}]\n본문: {original_text}"
+            injected_text = f"[사건명: {title}] [피심인기업명: {company}] [위반유형: {violation}]\n본문: {clean_original_text}"
             
             processed_chunks.append({
                 "chunk_id": chunk_id,
@@ -78,7 +128,9 @@ def load_and_inject_data(data_dir: str, max_files: int = 10) -> List[Dict[str, A
                     "violation": violation
                 }
             })
-            
+        
+        
+
     return processed_chunks
 
 
@@ -98,9 +150,9 @@ def build_indices():
         documents.append(item["injected_text"])
         metadatas.append(item["metadata"])
         
-        # [수정됨] Okt 형태소 분석기가 너무 느리므로 임시로 띄어쓰기 기반 분할 적용
+        
         # 나중에 Mecab 환경이 구축되면 tokens = mecab.morphs(item["injected_text"]) 로 복구하세요.
-        tokens = item["injected_text"].split()
+        tokens = okt.morphs(item["injected_text"])
         tokenized_corpus.append(tokens)
 
     # 2. ChromaDB에 벡터 저장
@@ -127,7 +179,8 @@ def build_indices():
     with open(BM25_INDEX_PATH, 'wb') as f:
         pickle.dump(bm25, f)
         
-    corpus_info = [{"chunk_id": c["chunk_id"], "injected_text": c["injected_text"]} for c in chunks]
+    #corpus_info = [{"chunk_id": c["chunk_id"], "injected_text": c["injected_text"]} for c in chunks]
+    corpus_info = [{"chunk_id": c["chunk_id"], "injected_text": c["injected_text"], "metadata": c["metadata"]} for c in chunks]
     with open(CORPUS_INFO_PATH, 'wb') as f:
         pickle.dump(corpus_info, f)
         

@@ -1,19 +1,39 @@
 import pickle
 import chromadb
 from sentence_transformers import SentenceTransformer
-from konlpy.tag import Okt # [개선 1] 형태소 분석기 임포트
+from konlpy.tag import Okt 
+from kiwipiepy import Kiwi
+
 
 print("검색 엔진 및 DB 로딩 중...")
 embedding_model = SentenceTransformer('BAAI/bge-m3')
-okt = Okt() 
+#okt = Okt() 
+kiwi = Kiwi()
+
 
 chroma_client = chromadb.PersistentClient(path="./chroma_db")
 collection = chroma_client.get_collection(name="ftc_resolutions")
 
-with open("./bm25_index.pkl", 'rb') as f:
+with open("./bm25_index_kiwi.pkl", 'rb') as f:
     bm25 = pickle.load(f)
 with open("./corpus_info.pkl", 'rb') as f:
     corpus_info = pickle.load(f)
+
+
+STOPWORDS = {
+    "있다", "하다", "되다", "위하다", "통하다",
+    "경우", "사항", "내용", "관련"
+}
+
+def tokenize_kiwi(text):
+    tokens = kiwi.tokenize(text)
+    
+    return [
+        t.form for t in tokens
+        if (t.tag.startswith('N') or t.tag.startswith('V'))
+        and len(t.form) > 1
+        and t.form not in STOPWORDS
+    ]
 
 print("로딩 완료! 검색을 시작합니다.\n")
 
@@ -29,8 +49,7 @@ def hybrid_search(query: str, target_company: str, top_k: int = 5):
     vector_ids = vector_results['ids'][0]
 
     
-    # [개선 1] 띄어쓰기(.split()) 대신 형태소 분석기 적용
-    tokenized_query = okt.morphs(query) 
+    tokenized_query = tokenize_kiwi(query)
     bm25_scores = bm25.get_scores(tokenized_query)
     
     # BM25 결과에서도 타겟 기업의 문서만 필터링해서 뽑아냅니다.

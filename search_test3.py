@@ -1,25 +1,48 @@
 import pickle
 import chromadb
 from sentence_transformers import SentenceTransformer
-from konlpy.tag import Okt # [개선 1] 형태소 분석기 임포트
+from konlpy.tag import Okt 
+from kiwipiepy import Kiwi
+import time
+
 
 print("검색 엔진 및 DB 로딩 중...")
 embedding_model = SentenceTransformer('BAAI/bge-m3')
-okt = Okt() 
+#okt = Okt() 
+kiwi = Kiwi()
+
 
 chroma_client = chromadb.PersistentClient(path="./chroma_db")
 collection = chroma_client.get_collection(name="ftc_resolutions")
 
-with open("./bm25_index.pkl", 'rb') as f:
+with open("./bm25_index_kiwi.pkl", 'rb') as f:
     bm25 = pickle.load(f)
 with open("./corpus_info.pkl", 'rb') as f:
     corpus_info = pickle.load(f)
 
+
+STOPWORDS = {
+    "있다", "하다", "되다", "위하다", "통하다",
+    "경우", "사항", "내용", "관련"
+}
+
+def tokenize_kiwi(text):
+    tokens = kiwi.tokenize(text)
+    
+    return [
+        t.form for t in tokens
+        if (t.tag.startswith('N') or t.tag.startswith('V'))
+        and len(t.form) > 1
+        and t.form not in STOPWORDS
+    ]
+
 print("로딩 완료! 검색을 시작합니다.\n")
 
-
 def hybrid_search(query: str, target_company: str, top_k: int = 5):
+    timings = {}
+
     # [1] Vector Search 
+    t0 = time.perf_counter()
     query_embedding = embedding_model.encode([query], normalize_embeddings=True).tolist()
     vector_results = collection.query(
         query_embeddings=query_embedding,
@@ -27,28 +50,25 @@ def hybrid_search(query: str, target_company: str, top_k: int = 5):
         where={"company": target_company}
     )
     vector_ids = vector_results['ids'][0]
-
+    timings["vector_search"] = round(time.perf_counter() - t0, 4)
     
-    # [개선 1] 띄어쓰기(.split()) 대신 형태소 분석기 적용
-    tokenized_query = okt.morphs(query) 
+    # [2] bm25 search
+    t1 = time.perf_counter()
+    tokenized_query = tokenize_kiwi(query)
     bm25_scores = bm25.get_scores(tokenized_query)
     
-    # BM25 결과에서도 타겟 기업의 문서만 필터링해서 뽑아냅니다.
     bm25_filtered = []
     for i, score in sorted(enumerate(bm25_scores), key=lambda x: x[1], reverse=True):
-        # [개선 2] 단순 문자열 검색(find)이 아닌 메타데이터 완전 일치 필터링
-        # 주의: 이 코드가 작동하려면 embedding2.py에서 corpus_info를 저장할 때 metadata도 함께 저장해야 합니다.
         if corpus_info[i].get("metadata", {}).get("company") == target_company: 
             bm25_filtered.append(corpus_info[i]['chunk_id'])
         if len(bm25_filtered) >= 20:
             break
+        timings["bm25_search"] = round(time.perf_counter() - t1, 4)
 
-    # [3] RRF (Reciprocal Rank Fusion) 알고리즘으로 두 결과의 순위 합산
+    # [3] RRF (Reciprocal Rank Fusion) 
+    t2 = time.perf_counter()
     k = 60
     rrf_scores = {}
-    
-    # [개선 4] Vector와 BM25의 가중치(Weight) 조정
-    # 문맥 이해가 중요한 행정 문서 특성상 Vector의 비중을 더 높게 설정 (예: Vector 0.7, BM25 0.3)
     vector_weight = 0.7
     bm25_weight = 0.3
     
@@ -58,23 +78,22 @@ def hybrid_search(query: str, target_company: str, top_k: int = 5):
     for rank, doc_id in enumerate(bm25_filtered):
         rrf_scores[doc_id] = rrf_scores.get(doc_id, 0) + bm25_weight * (1 / (k + rank + 1))
 
-    # [4] 합산된 점수를 기준으로 내림차순 정렬
     sorted_rrf = sorted(rrf_scores.items(), key=lambda x: x[1], reverse=True)
-    
-    # 상위 K개(5개)의 chunk_id만 추출
     top_k_ids = [doc_id for doc_id, score in sorted_rrf[:top_k]]
     
-    # [5] (매우 중요) 대회 규정: 무조건 5개를 반환해야 함 (부족할 경우 채워넣기)
     if len(top_k_ids) < 5:
         for item in corpus_info:
-            # 여기도 메타데이터 기준으로 안전하게 fallback 처리
             if item.get("metadata", {}).get("company") == target_company and item['chunk_id'] not in top_k_ids:
                 top_k_ids.append(item['chunk_id'])
             if len(top_k_ids) == 5:
                 break
+    
+    timings["rrf_processing"] = round(time.perf_counter() - t2, 6)
+    timings["total_search"] = round(time.perf_counter() - t0, 4)
 
-    return top_k_ids
 
+    #return top_k_ids
+    return { "top_k_ids": top_k_ids, "timings": timings }
 
 if __name__ == "__main__":
     #test_query = "과징금 납부 기한"
@@ -86,9 +105,9 @@ if __name__ == "__main__":
     results = hybrid_search(test_query, target_company)
     
     print("-" * 80)
-    print(f"최종 추출된 Top-5 Chunk IDs (총 {len(results)}개):")
+    print(f"최종 추출된 Top-5 Chunk IDs (총 {len(results['top_k_ids'])}개):")
 
-    for i, chunk_id in enumerate(results, 1):
+    for i, chunk_id in enumerate(results['top_k_ids'], 1):
         matched_info = next((item for item in corpus_info if item['chunk_id'] == chunk_id), None)
 
         if matched_info:
@@ -98,4 +117,3 @@ if __name__ == "__main__":
             print(f"{i}. {chunk_id} \n  미리보기:(정보를 찾을 수 없음))\n")
         
     print("-" * 80)
-    # 1-80-46-79-74

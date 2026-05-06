@@ -1,25 +1,41 @@
 import os
 import json
 import pickle
+import difflib
 import chromadb
-from sentence_transformers import SentenceTransformer
 from rank_bm25 import BM25Okapi
-#from konlpy.tag import Mecab
 from konlpy.tag import Okt
 from typing import List, Dict, Any
 from tqdm import tqdm
+from kiwipiepy import Kiwi
+from sentence_transformers import SentenceTransformer
 
-DATA_DIR = "./data/공개본 의결서"  # hybrid.json과 metadata.json이 있는 폴더
-DB_DIR = "./chroma_db2"
-BM25_INDEX_PATH = "./bm25_index2.pkl"
-CORPUS_INFO_PATH = "./corpus_info2.pkl" # BM25와 매핑할 원본 데이터
+DATA_DIR = "./data/공개본 의결서"  
+DB_DIR = "./chroma_db"
+BM25_INDEX_PATH = "./bm25_index_kiwi.pkl"
+CORPUS_INFO_PATH = "./corpus_info_kiwi.pkl" 
 
 print("임베딩 모델 로딩 중...")
 embedding_model = SentenceTransformer('BAAI/bge-m3')
 
 # 형태소 분석기
-#mecab = Mecab()
-okt = Okt()
+#okt = Okt()
+kiwi = Kiwi()
+
+STOPWORDS = {
+    "있다", "하다", "되다", "위하다", "통하다",
+    "경우", "사항", "내용", "관련"
+}
+
+def tokenize_kiwi(text):
+    tokens = kiwi.tokenize(text)
+    
+    return [
+        t.form for t in tokens
+        if (t.tag.startswith('N') or t.tag.startswith('V'))
+        and len(t.form) > 1
+        and t.form not in STOPWORDS
+    ]
 
 # ChromaDB 로컬 영구 저장소 초기화
 chroma_client = chromadb.PersistentClient(path=DB_DIR)
@@ -28,7 +44,6 @@ collection = chroma_client.get_or_create_collection(
     metadata={"hnsw:space": "cosine"}
 )
 
-import difflib
 
 def clean_duplicate_text(text, similarity_threshold=0.9, min_length=15, window_size=10):
     """
@@ -91,8 +106,8 @@ def load_and_inject_data(data_dir: str, max_files: int = 10) -> List[Dict[str, A
     
     for filename in test_files:
         base_name = filename.replace("_metadata.json", "") 
-        meta_path = os.path.join(data_dir, filename) #metadata 파일 경로
-        hybrid_path = os.path.join(data_dir, f"{base_name}_hybrid.json") #hybrid 파일 경로
+        meta_path = os.path.join(data_dir, filename) 
+        hybrid_path = os.path.join(data_dir, f"{base_name}_hybrid.json") 
         
         if not os.path.exists(hybrid_path):
             continue
@@ -150,9 +165,9 @@ def build_indices():
         documents.append(item["injected_text"])
         metadatas.append(item["metadata"])
         
-        # [수정됨] Okt 형태소 분석기가 너무 느리므로 임시로 띄어쓰기 기반 분할 적용
-        # 나중에 Mecab 환경이 구축되면 tokens = mecab.morphs(item["injected_text"]) 로 복구하세요.
-        tokens = item["injected_text"].split()
+        
+        #tokens = okt.morphs(item["injected_text"])
+        tokens = tokenize_kiwi(item["injected_text"])
         tokenized_corpus.append(tokens)
 
     # 2. ChromaDB에 벡터 저장
@@ -179,7 +194,7 @@ def build_indices():
     with open(BM25_INDEX_PATH, 'wb') as f:
         pickle.dump(bm25, f)
         
-    corpus_info = [{"chunk_id": c["chunk_id"], "injected_text": c["injected_text"]} for c in chunks]
+    corpus_info = [{"chunk_id": c["chunk_id"], "injected_text": c["injected_text"], "metadata": c["metadata"],"tokens": tokenize_kiwi(c["injected_text"])} for c in chunks]
     with open(CORPUS_INFO_PATH, 'wb') as f:
         pickle.dump(corpus_info, f)
         
